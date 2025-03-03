@@ -1,0 +1,104 @@
+import re
+import requests
+from bs4 import BeautifulSoup
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+def scrape_url(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        html = response.text
+    except requests.RequestException as e:
+        print(f"Error fetching URL: {e}")
+        return ["Error fetching URL"] * 9  # Updated to 9 elements
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Extract title
+    title_span = soup.select_one(r'span.header-xl.sm\:header-3xl')
+    title = title_span.text.strip() if title_span else "Content not found"
+    
+    # Extract short description
+    short_desc = soup.select_one(r'p.text-sm.sm\:text-base.mb-1')
+    short_desc = short_desc.text.strip() if short_desc else "Paragraph content not found"
+    
+    # Extract long description
+    long_desc = soup.select_one(r'p.mt-8.mb-6.lg\:mt-14.lg\:mb-14.font-normal')
+    long_desc = long_desc.text.strip() if long_desc else "Paragraph content not found"
+    
+    # Extract deal info
+    deal_info = soup.select_one(r'div.font-semibold.mb-4.text-center.text-xl.break-words')
+    deal_info = deal_info.text.strip() if deal_info else "Content not found"
+    
+    # Extract monetary value
+    monetary_value = soup.select_one(r'p.font-medium')
+    if not monetary_value:
+        monetary_value = soup.select_one(r'div.bg-opacity-10.bg-mint.m-auto.p-1.px-3.rounded-full.text-center.text-mint.text-sm.w-fit.mb-3.lg\:mb-4')
+    monetary_value = monetary_value.text.strip() if monetary_value else "Monetary value not found"
+
+    # Extract requirements
+    requirements = soup.select_one(r'div.text-xs.leading-normal')
+    requirements = requirements.text.strip() if requirements else "Content not found"
+    
+    # Extract all benefits
+    benefits_ul = soup.select_one(r'ul.mt-6.mb-8')
+    if benefits_ul:
+        benefits = []
+        for h3 in benefits_ul.select(r'h3.font-bold'):
+            benefit = h3.text.strip()
+            description = h3.find_next(r'p').text.strip()
+            benefits.append(f"{benefit} - {description}")
+        all_benefits = '\n'.join(benefits)
+    else:
+        all_benefits = "Paragraph content not found"
+    
+    return [title, title, url, short_desc, monetary_value, deal_info, all_benefits, long_desc, requirements]
+
+def scrape_multiple_urls():
+    # Set up the credentials
+    scope = ['https://spreadsheets.google.com/feeds', 
+             'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_name(
+        '/Users/boazhansen/Downloads/joinsecretscrape-02d83360f331.json', 
+        scope
+    )
+    client = gspread.authorize(creds)
+    
+    # Open the spreadsheet
+    sheet_url = 'https://docs.google.com/spreadsheets/d/11d23RAKsAF8C9qjTqTWQL1DSEx47TND5ny_ShTc_wBE/edit?gid=0#gid=0'
+    sheet = client.open_by_url(sheet_url).worksheet("Sheet3")
+    
+    # Clear the sheet
+    sheet.clear()
+    
+    # Set the headers
+    headers = [
+        "Name", "Slug", "Company website link", 
+        "Description (Maximum 180 characters)",
+        "TICKET - Description (Maximum 50 characters)", 
+        "TICKET - Title (Maximum 35 characters)", 
+        "Benefits", "About", "Claim Requirements"
+    ]
+    sheet.update(range_name='A1:I1', values=[headers])
+    
+    urls = [
+        "https://www.joinsecret.com/apify",
+        "https://www.joinsecret.com/databricks",
+        "https://www.joinsecret.com/webflow"
+    ]
+    
+    for index, url in enumerate(urls, start=2):
+        row_data = scrape_url(url)
+        sheet.update(range_name=f'A{index}:I{index}', values=[row_data])
+    
+    print("Scraping completed and data written to the sheet.")
+
+if __name__ == "__main__":
+    scrape_multiple_urls()

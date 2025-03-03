@@ -1,0 +1,199 @@
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import re
+
+def authenticate_google_sheets(json_keyfile_path, scopes):
+    """
+    Authenticates and returns a gspread client.
+    """
+    try:
+        credentials = ServiceAccountCredentials.from_json_keyfile_name(json_keyfile_path, scopes)
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        print(f"Error during authentication: {e}")
+        sys.exit(1)
+
+def get_column_index(headers, target_header):
+    """
+    Returns the 1-based index of the target_header in headers list.
+    """
+    try:
+        return headers.index(target_header) + 1
+    except ValueError:
+        print(f"'{target_header}' column not found in headers.")
+        sys.exit(1)
+
+def col_num_to_letter(col_num):
+    """
+    Converts a column number to its corresponding Excel-style column letter.
+    For example: 1 -> 'A', 27 -> 'AA'
+    """
+    letters = ''
+    while col_num > 0:
+        col_num, remainder = divmod(col_num - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+def transform_benefits_text(benefits_text):
+    """
+    Transforms the benefits text into the desired HTML <ul> format.
+    
+    Input Format:
+    Benefit Name - Benefit Description
+    Benefit Name 2 - Benefit Description 2
+    ...
+    
+    Output Format:
+    <ul>
+        <li><strong>Benefit Name</strong> - Benefit Description</li>
+        <li><strong>Benefit Name 2</strong> - Benefit Description 2</li>
+        ...
+    </ul>
+    """
+    if not benefits_text or benefits_text.strip() == "":
+        return ""  # Return empty string if cell is empty
+
+    benefits_text = benefits_text.strip()
+
+    # Check if already transformed
+    if benefits_text.startswith("<ul>") and benefits_text.endswith("</ul>"):
+        return benefits_text  # Already transformed
+
+    # Split the benefits by newline characters
+    benefits_list = benefits_text.split('\n')
+    transformed_benefits = []
+
+    for benefit in benefits_list:
+        # Use regex to split only on the first ' - ' occurrence
+        match = re.match(r'^(.*?)\s*-\s*(.*)$', benefit)
+        if match:
+            name, description = match.groups()
+            transformed_benefit = f"<li><strong>{name.strip()}</strong> - {description.strip()}</li>"
+            transformed_benefits.append(transformed_benefit)
+        else:
+            # If the format doesn't match, include the original text without transformation
+            transformed_benefits.append(f"<li>{benefit.strip()}</li>")
+
+    # Combine all list items into a single HTML unordered list
+    html_benefits = "<ul>\n" + "\n".join(transformed_benefits) + "\n</ul>"
+    return html_benefits
+
+def transform_about_text(about_text):
+    """
+    Transforms the about text by wrapping it in <p> tags.
+    
+    Input Format:
+    Plain text description.
+    
+    Output Format:
+    <p>Plain text description.</p>
+    """
+    if not about_text or about_text.strip() == "":
+        return ""  # Return empty string if cell is empty
+
+    about_text = about_text.strip()
+
+    # Check if already transformed
+    if about_text.startswith("<p>") and about_text.endswith("</p>"):
+        return about_text  # Already transformed
+
+    # Wrap the text in <p> tags
+    transformed_about = f"<p>{about_text}</p>"
+    return transformed_about
+
+def main():
+    # ---------------------------
+    # Configuration Parameters
+    # ---------------------------
+    JSON_KEYFILE_PATH = '/Users/boazhansen/Downloads/joinsecretscrape-02d83360f331.json'  # Update if different
+    SCOPES = ['https://spreadsheets.google.com/feeds',
+              'https://www.googleapis.com/auth/drive']
+    SHEET_URL = 'https://docs.google.com/spreadsheets/d/11d23RAKsAF8C9qjTqTWQL1DSEx47TND5ny_ShTc_wBE/edit#gid=0'
+    WORKSHEET_NAME = 'Sheet3'
+    BENEFITS_HEADER = 'Benefits'  # Column header name for Benefits
+    ABOUT_HEADER = 'About'         # Column header name for About
+
+    # ---------------------------
+    # Authenticate and Open Sheet
+    # ---------------------------
+    client = authenticate_google_sheets(JSON_KEYFILE_PATH, SCOPES)
+    try:
+        sheet = client.open_by_url(SHEET_URL).worksheet(WORKSHEET_NAME)
+    except Exception as e:
+        print(f"Error opening sheet: {e}")
+        sys.exit(1)
+
+    # ---------------------------
+    # Get Headers and Identify Columns
+    # ---------------------------
+    try:
+        headers = sheet.row_values(1)  # Assumes first row is headers
+        benefits_col = get_column_index(headers, BENEFITS_HEADER)
+        about_col = get_column_index(headers, ABOUT_HEADER)
+        benefits_col_letter = col_num_to_letter(benefits_col)
+        about_col_letter = col_num_to_letter(about_col)
+        print(f"'{BENEFITS_HEADER}' found in column {benefits_col_letter}")
+        print(f"'{ABOUT_HEADER}' found in column {about_col_letter}")
+    except Exception as e:
+        print(f"Error retrieving headers: {e}")
+        sys.exit(1)
+
+    # ---------------------------
+    # Get All Benefits and About Cells
+    # ---------------------------
+    try:
+        # Get all values in the Benefits and About columns starting from row 2
+        benefits_cells = sheet.col_values(benefits_col)[1:]  # Exclude header
+        about_cells = sheet.col_values(about_col)[1:]        # Exclude header
+        total_rows = max(len(benefits_cells), len(about_cells))
+        print(f"Found {total_rows} rows to process in '{BENEFITS_HEADER}' and '{ABOUT_HEADER}' columns.")
+    except Exception as e:
+        print(f"Error retrieving column data: {e}")
+        sys.exit(1)
+
+    # ---------------------------
+    # Transform Benefits and About Data
+    # ---------------------------
+    cells_to_update = []  # List of gspread.Cell objects
+
+    for idx in range(total_rows):
+        row_number = idx + 2  # Start at row 2
+
+        # Handle Benefits transformation
+        try:
+            benefits_text = benefits_cells[idx] if idx < len(benefits_cells) else ""
+            transformed_benefits = transform_benefits_text(benefits_text)
+            if transformed_benefits and transformed_benefits != benefits_text:
+                cells_to_update.append(gspread.Cell(row=row_number, col=benefits_col, value=transformed_benefits))
+        except Exception as e:
+            print(f"Error transforming 'Benefits' at row {row_number}: {e}")
+
+        # Handle About transformation
+        try:
+            about_text = about_cells[idx] if idx < len(about_cells) else ""
+            transformed_about = transform_about_text(about_text)
+            if transformed_about and transformed_about != about_text:
+                cells_to_update.append(gspread.Cell(row=row_number, col=about_col, value=transformed_about))
+        except Exception as e:
+            print(f"Error transforming 'About' at row {row_number}: {e}")
+
+        # Progress Indicator
+        if (idx + 1) % 10 == 0 or (idx + 1) == total_rows:
+            print(f"Processed {idx + 1}/{total_rows} rows.")
+
+    # ---------------------------
+    # Update the Sheet with Transformed Data
+    # ---------------------------
+    try:
+        if cells_to_update:
+            sheet.update_cells(cells_to_update)
+            print("All applicable 'Benefits' and 'About' entries have been successfully transformed and updated.")
+        else:
+            print("No entries needed transformation. All 'Benefits' and 'About' cells are already in the desired format.")
+    except Exception as e:
+        print(f"Error updating sheet: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
